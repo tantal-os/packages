@@ -61,6 +61,8 @@ ECDSA. Model revocations use the model publisher's Ed25519 key.
 
 Set the repository secret `CATALOG_PRIVATE_KEY` to the PEM Ed25519 private
 key and the variable `CATALOG_PUBLIC_KEY` to its Base64 SPKI DER public key.
+The workflow validates definitions before key setup and enables index
+publication once `CATALOG_PUBLIC_KEY` is set.
 Supply the same public value to Depot releases. Keep the private key in the
 maintainer's signing storage and GitHub Actions secret store.
 

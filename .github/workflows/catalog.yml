@@ -21,7 +21,7 @@ jobs:
       - run: python3 publish.py --check
 
   publish:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.CATALOG_PUBLIC_KEY != ''
     needs: validate
     runs-on: ubuntu-latest
     concurrency:
@@ -40,6 +40,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -z "$CATALOG_PRIVATE_KEY" ]]; then
+            echo "::error::The CATALOG_PRIVATE_KEY repository secret is required when catalog publishing is enabled"
+            exit 1
+          fi
           umask 077
           key=$(mktemp)
           trap 'rm -f "$key"' EXIT
