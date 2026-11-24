@@ -1,0 +1,85 @@
+name: Catalog
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "14 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: python3 publish.py --check
+
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    concurrency:
+      group: catalog-index
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+      - name: Build signed index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CATALOG_PRIVATE_KEY: ${{ secrets.CATALOG_PRIVATE_KEY }}
+          CATALOG_PUBLIC_KEY: ${{ vars.CATALOG_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$CATALOG_PRIVATE_KEY" > "$key"
+          unset CATALOG_PRIVATE_KEY
+          export CATALOG_KEY_FILE="$key"
+          tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          git ls-remote --heads origin refs/heads/index > "$RUNNER_TEMP/index-ref"
+          previous=()
+          if [[ -s "$RUNNER_TEMP/index-ref" ]]; then
+            git fetch origin refs/heads/index
+            git show FETCH_HEAD:index.json > "$RUNNER_TEMP/previous.json"
+            previous=(--previous "$RUNNER_TEMP/previous.json")
+          fi
+          python3 publish.py "${previous[@]}" --tools "$tools" \
+            --output "$RUNNER_TEMP/index.json" --report "$RUNNER_TEMP/report.txt"
+      - name: Publish index
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f "$RUNNER_TEMP/index.json" ]]; then
+            export GIT_AUTHOR_NAME=github-actions GIT_COMMITTER_NAME=github-actions
+            export GIT_AUTHOR_EMAIL=41898282+github-actions[bot]@users.noreply.github.com
+            export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+            export GIT_INDEX_FILE="$RUNNER_TEMP/index-stage"
+            blob=$(git hash-object -w "$RUNNER_TEMP/index.json")
+            git update-index --add --cacheinfo "100644,$blob,index.json"
+            tree=$(git write-tree)
+            parent=()
+            if [[ -s "$RUNNER_TEMP/index-ref" ]]; then
+              read -r old _ < "$RUNNER_TEMP/index-ref"
+              parent=(-p "$old")
+            fi
+            commit=$(git commit-tree "$tree" "${parent[@]}" -m "Publish signed catalog")
+            git push origin "$commit:refs/heads/index"
+          fi
+      - name: Report rejected releases
+        shell: bash
+        run: |
+          if [[ -s "$RUNNER_TEMP/report.txt" ]]; then
+            cat "$RUNNER_TEMP/report.txt" >&2
+            exit 1
+          fi
